@@ -5,16 +5,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.with
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,13 +34,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.DismissDirection
 import androidx.compose.material.DismissValue
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.SwipeToDismiss
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
@@ -47,8 +54,10 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,10 +80,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.example.simplelists.ui.theme.SimpleListsTheme
-
+import androidx.compose.foundation.ExperimentalFoundationApi
 
 
 class MainActivity : ComponentActivity() {
@@ -86,7 +96,11 @@ class MainActivity : ComponentActivity() {
             var darkMode by remember { mutableStateOf(false) }
             SimpleListsTheme(darkTheme = darkMode) {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    App(vm, onToggleTheme = { darkMode = !darkMode })
+                    App(
+                        vm = vm,
+                        isDarkTheme = darkMode,
+                        onToggleTheme = { darkMode = !darkMode }
+                    )
                 }
             }
         }
@@ -97,15 +111,23 @@ class MainActivity : ComponentActivity() {
     ExperimentalMaterial3Api::class,
     ExperimentalMaterialApi::class,
     ExperimentalLayoutApi::class,
-    ExperimentalAnimationApi::class
+    ExperimentalAnimationApi::class,
+    ExperimentalFoundationApi::class,
 )
 @Composable
-fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
+fun App(
+    vm: ItemsViewModel,
+    isDarkTheme: Boolean,
+    onToggleTheme: () -> Unit
+) {
     val lists by vm.lists.collectAsState()
     val items by vm.items.collectAsState()
     val selectedListId by vm.selectedListId.collectAsState()
     val selectedParentId by vm.selectedParentId.collectAsState()
     val path by vm.path.collectAsState()
+
+    // foldery w aktywnej liście (do dialogu przenoszenia)
+    val allFolders by vm.allFoldersInSelectedList.collectAsState()
 
     var editDialog by remember { mutableStateOf<UiItem?>(null) }
     var editText by remember { mutableStateOf(TextFieldValue("")) }
@@ -118,6 +140,13 @@ fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
     var newItem by remember { mutableStateOf(TextFieldValue("")) }
     var newFolder by remember { mutableStateOf(TextFieldValue("")) }
     var confirmDeleteList by remember { mutableStateOf(false) }
+
+    // FAB (lewy dół) do panelu add item/folder
+    var showAddSection by remember { mutableStateOf(false) }
+    // Mały przycisk „Add list” w appbarze
+    var showAddList by remember { mutableStateOf(false) }
+    // dialog przenoszenia
+    var moveDialogFor by remember { mutableStateOf<UiItem?>(null) }
 
     val bigShape = MaterialTheme.shapes.extraLarge
 
@@ -133,6 +162,13 @@ fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
                 },
                 title = { Text("Simple Lists") },
                 actions = {
+                    // Mały przycisk, który pokazuje/ukrywa pole „New list”
+                    IconButton(onClick = { showAddList = !showAddList }) {
+                        Icon(
+                            imageVector = if (showAddList) Icons.Filled.Close else Icons.Filled.Add,
+                            contentDescription = if (showAddList) "Close add list" else "Add list"
+                        )
+                    }
                     IconButton(onClick = onToggleTheme) {
                         Icon(Icons.Filled.DarkMode, contentDescription = "Toggle theme")
                     }
@@ -140,240 +176,328 @@ fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
+        Box(
             Modifier
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            // --- Dodawanie LISTY ---
-            Row(
-                Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                Modifier.fillMaxSize()
             ) {
-                OutlinedTextField(
-                    value = newList,
-                    onValueChange = { newList = it },
-                    label = { Text("New list") },
-                    singleLine = true,
-                    shape = bigShape,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = {
-                    vm.addList(newList.text)
-                    newList = TextFieldValue("")
-                }) { Text("Add") }
-            }
-
-            // --- Zakładki LIST ---
-            if (lists.isNotEmpty() && selectedListId != -1L) {
-                val rawIndex = lists.indexOfFirst { it.id == selectedListId }
-                val safeIndex = (if (rawIndex == -1) 0 else rawIndex).coerceIn(0, lists.lastIndex)
-
-                key(lists.size) {
-                    ScrollableTabRow(selectedTabIndex = safeIndex, edgePadding = 12.dp, divider = {}) {
-                        lists.forEachIndexed { idx, l ->
-                            val selected = idx == safeIndex
-                            val bg by animateColorAsState(
-                                if (selected) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceVariant, label = ""
-                            )
-                            val fg by animateColorAsState(
-                                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                                else MaterialTheme.colorScheme.onSurfaceVariant, label = ""
-                            )
-                            Tab(
-                                selected = selected,
-                                onClick = { vm.selectList(l.id) },
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            l.name,
-                                            color = fg,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(bg)
-                                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                        )
-                                        if (selected) {
-                                            IconButton(onClick = {
-                                                editListDialog = l
-                                                editListText = TextFieldValue(l.name)
-                                            }) {
-                                                Icon(Icons.Filled.Edit, contentDescription = "Edit list")
-                                            }
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // --- Breadcrumbs jako chipsy ---
-            val crumbTexts = buildList {
-                add(lists.firstOrNull { it.id == selectedListId }?.name ?: "-")
-                addAll(path.map { it.second })
-            }
-            if (crumbTexts.isNotEmpty()) {
-                FlowRow(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    maxItemsInEachRow = 4,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                // --- Dodawanie LISTY (ukryte pod Add list w appbarze) ---
+                AnimatedVisibility(
+                    visible = showAddList,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
                 ) {
-                    crumbTexts.forEachIndexed { i, text ->
-                        val isLast = i == crumbTexts.lastIndex
-                        AssistChip(
-                            onClick = { if (!isLast) vm.goToBreadcrumb(i) },
-                            label = { Text(text) },
-                            enabled = !isLast,
-                            colors = AssistChipDefaults.assistChipColors(
-                                containerColor = if (isLast) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                                labelColor = if (isLast) MaterialTheme.colorScheme.onPrimaryContainer
-                                else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = newList,
+                            onValueChange = { newList = it },
+                            label = { Text("New list") },
+                            singleLine = true,
+                            shape = bigShape,
+                            modifier = Modifier.weight(1f)
                         )
+                        Spacer(Modifier.width(8.dp))
+                        FilledTonalButton(onClick = {
+                            vm.addList(newList.text)
+                            newList = TextFieldValue("")
+                            showAddList = false // schowaj po dodaniu
+                        }) { Text("Add") }
                     }
                 }
-            }
 
-            // --- Dodawanie ITEMU ---
-            Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = newItem,
-                    onValueChange = { newItem = it },
-                    label = { Text("New item") },
-                    singleLine = true,
-                    shape = bigShape,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = {
-                    vm.addItem(newItem.text)
-                    newItem = TextFieldValue("")
-                }) { Text("Add item") }
-            }
+                // --- Zakładki LIST ---
+                if (lists.isNotEmpty() && selectedListId != -1L) {
+                    val rawIndex = lists.indexOfFirst { it.id == selectedListId }
+                    val safeIndex = (if (rawIndex == -1) 0 else rawIndex).coerceIn(0, lists.lastIndex)
 
-            // --- Dodawanie FOLDERU ---
-            Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = newFolder,
-                    onValueChange = { newFolder = it },
-                    label = { Text("New sublist (folder)") },
-                    singleLine = true,
-                    shape = bigShape,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = {
-                    vm.addFolder(newFolder.text)
-                    newFolder = TextFieldValue("")
-                }) { Text("Add folder") }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // --- Lista elementów z animacją ---
-            AnimatedContent(
-                targetState = items,
-                transitionSpec = {
-                    (slideInHorizontally { it } + fadeIn(tween(200))) with
-                            (slideOutHorizontally { -it } + fadeOut(tween(200)))
-                }, label = ""
-            ) { listContent ->
-                if (listContent.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No items yet.")
-                    }
-                } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(listContent.sortedWith(compareBy<UiItem> { it.done }.thenBy { it.title })) { item ->
-                            val dismissState = rememberDismissState(
-                                confirmStateChange = { value ->
-                                    if (value == DismissValue.DismissedToEnd || value == DismissValue.DismissedToStart) {
-                                        vm.deleteItem(item.id, item.title, item.done, item.parentId, item.isFolder)
-                                        true
-                                    } else false
-                                }
-                            )
-
-                            val baseColor = when {
-                                item.isFolder -> MaterialTheme.colorScheme.primaryContainer
-                                item.done     -> Color(0xFF81C784) // zielony pastel (Material Green 300)
-                                else          -> MaterialTheme.colorScheme.surface
-                            }
-
-                            val cardColor by animateColorAsState(baseColor, label = "")
-
-                            SwipeToDismiss(
-                                state = dismissState,
-                                background = {
-                                    Box(
-                                        Modifier
-                                            .fillMaxSize()
-                                            .background(MaterialTheme.colorScheme.errorContainer)
-                                    )
-                                },
-                                dismissContent = {
-                                    ElevatedCard(
-                                        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-                                        shape = MaterialTheme.shapes.extraLarge,
-                                        colors = CardDefaults.elevatedCardColors(containerColor = cardColor),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable(enabled = item.isFolder) {
-                                                if (item.isFolder) vm.openSublist(item.id, item.title)
-                                            }
-                                    ) {
+                    key(lists.size) {
+                        ScrollableTabRow(selectedTabIndex = safeIndex, edgePadding = 12.dp, divider = {}) {
+                            lists.forEachIndexed { idx, l ->
+                                val selected = idx == safeIndex
+                                val bg by animateColorAsState(
+                                    if (selected) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant, label = ""
+                                )
+                                val fg by animateColorAsState(
+                                    if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant, label = ""
+                                )
+                                Tab(
+                                    selected = selected,
+                                    onClick = { vm.selectList(l.id) },
+                                    text = {
                                         Row(
-                                            Modifier
-                                                .padding(14.dp)
-                                                .fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            if (item.isFolder) {
-                                                Icon(Icons.Filled.Folder, contentDescription = null)
-                                                Spacer(Modifier.width(10.dp))
-                                                Text(item.title, modifier = Modifier.weight(1f))
-                                            } else {
-                                                Checkbox(
-                                                    checked = item.done,
-                                                    onCheckedChange = { vm.toggleDone(item.id, item.done) }
-                                                )
-                                                Spacer(Modifier.width(6.dp))
-                                                Column(Modifier.weight(1f)) {
-                                                    Text(item.title)
-                                                    if (item.done) Text("Done", style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                l.name,
+                                                color = fg,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(bg)
+                                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                            )
+                                            if (selected) {
+                                                IconButton(onClick = {
+                                                    editListDialog = l
+                                                    editListText = TextFieldValue(l.name)
+                                                }) {
+                                                    Icon(Icons.Filled.Edit, contentDescription = "Edit list")
                                                 }
-                                            }
-                                            IconButton(onClick = {
-                                                editDialog = item
-                                                editText = TextFieldValue(item.title)
-                                            }) {
-                                                Icon(Icons.Filled.Edit, contentDescription = "Edit")
                                             }
                                         }
                                     }
-                                },
-                                directions = setOf(DismissDirection.StartToEnd, DismissDirection.EndToStart)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // --- Breadcrumbs jako chipsy ---
+                val crumbTexts = buildList {
+                    add(lists.firstOrNull { it.id == selectedListId }?.name ?: "-")
+                    addAll(path.map { it.second })
+                }
+                if (crumbTexts.isNotEmpty()) {
+                    FlowRow(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        maxItemsInEachRow = 4,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        crumbTexts.forEachIndexed { i, text ->
+                            val isLast = i == crumbTexts.lastIndex
+                            AssistChip(
+                                onClick = { if (!isLast) vm.goToBreadcrumb(i) },
+                                label = { Text(text) },
+                                enabled = !isLast,
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = if (isLast) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    labelColor = if (isLast) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             )
                         }
                     }
                 }
+
+                // --- Panel dodawania ITEM/FOLDER (ukryty FABem w lewym dolnym rogu) ---
+                AnimatedVisibility(
+                    visible = showAddSection,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
+                ) {
+                    Column {
+                        // --- Dodawanie ITEMU ---
+                        Row(
+                            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newItem,
+                                onValueChange = { newItem = it },
+                                label = { Text("New item") },
+                                singleLine = true,
+                                shape = bigShape,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            FilledTonalButton(onClick = {
+                                vm.addItem(newItem.text)
+                                newItem = TextFieldValue("")
+                            }) { Text("Add item") }
+                        }
+
+                        // --- Dodawanie FOLDERU ---
+                        Row(
+                            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newFolder,
+                                onValueChange = { newFolder = it },
+                                label = { Text("New sublist (folder)") },
+                                singleLine = true,
+                                shape = bigShape,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            FilledTonalButton(onClick = {
+                                vm.addFolder(newFolder.text)
+                                newFolder = TextFieldValue("")
+                            }) { Text("Add folder") }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // --- Lista elementów z animacją ---
+                AnimatedContent(
+                    targetState = items,
+                    transitionSpec = {
+                        (slideInHorizontally { it } + fadeIn(tween(200))) with
+                                (slideOutHorizontally { -it } + fadeOut(tween(200)))
+                    }, label = ""
+                ) { listContent ->
+                    if (listContent.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No items yet.")
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(listContent.sortedWith(compareBy<UiItem> { it.done }.thenBy { it.title })) { item ->
+                                val dismissState = rememberDismissState(
+                                    confirmStateChange = { value ->
+                                        if (value == DismissValue.DismissedToEnd || value == DismissValue.DismissedToStart) {
+                                            vm.deleteItem(item.id, item.title, item.done, item.parentId, item.isFolder)
+                                            true
+                                        } else false
+                                    }
+                                )
+
+                                // Tło karty
+                                val baseColor = when {
+                                    item.isFolder -> MaterialTheme.colorScheme.primaryContainer
+                                    item.done     -> Color(0xFFA5D6A7) // jasny zielony dla "done"
+                                    else          -> MaterialTheme.colorScheme.surface
+                                }
+                                val cardColor by animateColorAsState(baseColor, label = "")
+
+                                // Czytelność treści (kontrast)
+                                val preferredOn = when {
+                                    item.isFolder -> MaterialTheme.colorScheme.onPrimaryContainer
+                                    item.done && isDarkTheme -> Color.Black
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                                val autoOn = if (cardColor.luminance() > 0.5f) Color.Black else Color.White
+                                val contentColor = if (item.done) {
+                                    if (isDarkTheme) Color.Black else autoOn
+                                } else {
+                                    preferredOn
+                                }
+
+                                SwipeToDismiss(
+                                    state = dismissState,
+                                    background = {
+                                        Box(
+                                            Modifier
+                                                .fillMaxSize()
+                                                .background(MaterialTheme.colorScheme.errorContainer)
+                                        )
+                                    },
+                                    dismissContent = {
+                                        ElevatedCard(
+                                            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+                                            shape = MaterialTheme.shapes.extraLarge,
+                                            colors = CardDefaults.elevatedCardColors(
+                                                containerColor = cardColor,
+                                                contentColor = contentColor
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                // foldery otwieramy kliknięciem
+                                                .clickable(enabled = item.isFolder) {
+                                                    if (item.isFolder) vm.openSublist(item.id, item.title)
+                                                }
+                                        ) {
+                                            // dodaj warunkowy modifier: gest long‑press tylko dla NIE‑folderów
+                                            val rowGestures =
+                                                if (!item.isFolder) {
+                                                    Modifier.combinedClickable(
+                                                        onLongClick = { moveDialogFor = item },
+                                                        onClick = { /* nic - klik obsługują inne elementy */ }
+                                                    )
+                                                } else {
+                                                    Modifier // dla folderów: brak gestu na Row, żeby klik karty działał na całej powierzchni
+                                                }
+
+                                            Row(
+                                                Modifier
+                                                    .padding(14.dp)
+                                                    .fillMaxWidth()
+                                                    .then(rowGestures),          // <— kluczowa zmiana
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                if (item.isFolder) {
+                                                    Icon(
+                                                        Icons.Filled.Folder,
+                                                        contentDescription = null,
+                                                        tint = contentColor
+                                                    )
+                                                    Spacer(Modifier.width(10.dp))
+                                                    Text(
+                                                        item.title,
+                                                        color = contentColor,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                } else {
+                                                    Checkbox(
+                                                        checked = item.done,
+                                                        onCheckedChange = { vm.toggleDone(item.id, item.done) },
+                                                        colors = CheckboxDefaults.colors(
+                                                            checkedColor   = if (item.done && isDarkTheme) Color.Black else MaterialTheme.colorScheme.primary,
+                                                            checkmarkColor = Color.White,
+                                                            uncheckedColor = MaterialTheme.colorScheme.outline
+                                                        )
+                                                    )
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(item.title, color = contentColor)
+                                                        if (item.done) {
+                                                            Text(
+                                                                "Done",
+                                                                color = contentColor.copy(alpha = 0.8f),
+                                                                style = MaterialTheme.typography.bodySmall
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                IconButton(onClick = {
+                                                    editDialog = item
+                                                    editText = TextFieldValue(item.title)
+                                                }) {
+                                                    Icon(
+                                                        Icons.Filled.Edit,
+                                                        contentDescription = "Edit",
+                                                        tint = contentColor
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    directions = setOf(DismissDirection.StartToEnd, DismissDirection.EndToStart)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- FAB: pokaz/ukryj panel dodawania item/folder ---
+            FloatingActionButton(
+                onClick = { showAddSection = !showAddSection },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp),
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = if (showAddSection) Icons.Filled.Close else Icons.Filled.Add,
+                    contentDescription = if (showAddSection) "Close add panel" else "Open add panel"
+                )
             }
         }
 
@@ -443,8 +567,7 @@ fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
                 onDismissRequest = { editListDialog = null },
                 confirmButton = {
                     TextButton(onClick = {
-                        // tu wystarczy update w repo jak w items (dodaj w ViewModel)
-                        // vm.updateList(cur.id, editListText.text)
+                        vm.updateList(cur.id, editListText.text)  // zapis nazwy
                         editListDialog = null
                     }) { Text("Save") }
                 },
@@ -453,13 +576,74 @@ fun App(vm: ItemsViewModel, onToggleTheme: () -> Unit) {
                 },
                 title = { Text("Rename list") },
                 text = {
-                    OutlinedTextField(
-                        value = editListText,
-                        onValueChange = { editListText = it },
-                        singleLine = true,
-                        shape = MaterialTheme.shapes.large,
-                        label = { Text("Name") }
-                    )
+                    Column {
+                        OutlinedTextField(
+                            value = editListText,
+                            onValueChange = { editListText = it },
+                            singleLine = true,
+                            shape = MaterialTheme.shapes.large,
+                            label = { Text("Name") }
+                        )
+
+                        Spacer(Modifier.height(12.dp))
+
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(Modifier.weight(1f))
+                            TextButton(
+                                onClick = {
+                                    editListDialog = null
+                                    confirmDeleteList = true
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text("Delete list")
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        // --- Dialog „Move to…” dla itemu ---
+        if (moveDialogFor != null) {
+            val src = moveDialogFor!!
+            AlertDialog(
+                onDismissRequest = { moveDialogFor = null },
+                confirmButton = {}, // niepotrzebny – wybór poniżej
+                dismissButton = {
+                    TextButton(onClick = { moveDialogFor = null }) { Text("Cancel") }
+                },
+                title = { Text("Move \"${src.title}\" to…") },
+                text = {
+                    Column {
+                        TextButton(onClick = {
+                            vm.moveItemToFolder(src.id, null) // do roota listy
+                            moveDialogFor = null
+                        }) { Text("— Top level (no folder) —") }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        if (allFolders.isEmpty()) {
+                            Text("No folders in this list yet.")
+                        } else {
+                            LazyColumn {
+                                items(allFolders) { folder ->
+                                    TextButton(onClick = {
+                                        vm.moveItemToFolder(src.id, folder.id)
+                                        moveDialogFor = null
+                                    }) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Filled.Folder, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(folder.title)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             )
         }

@@ -84,6 +84,14 @@ class ItemsViewModel(app: Application) : AndroidViewModel(app) {
         clearPath()
     }
 
+    // w klasie ItemsViewModel:
+    fun updateList(id: Long, newName: String) = viewModelScope.launch {
+        val n = newName.trim()
+        if (n.isNotEmpty()) {
+            repo.updateList(id, n)
+        }
+    }
+
     // --- Foldery / podlisty ---
     fun openSublist(id: Long, title: String) {
         _selectedParentId.value = id
@@ -100,6 +108,19 @@ class ItemsViewModel(app: Application) : AndroidViewModel(app) {
             _selectedParentId.value = null
         }
     }
+
+    // Strumień wszystkich folderów w aktywnej liście (niezależnie od poziomu)
+    val allFoldersInSelectedList: StateFlow<List<UiItem>> =
+        _selectedListId
+            .flatMapLatest { listId -> repo.observeAllFoldersInList(listId) }
+            .map { it.map { e -> UiItem(e.id, e.title, e.done, e.parentId, e.isFolder) } }
+            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun moveItemToFolder(itemId: Long, targetFolderId: Long?) = viewModelScope.launch {
+        // targetFolderId == null -> przeniesienie do "roota" listy
+        repo.moveItemToParent(itemId, targetFolderId)
+    }
+
 
     // przejdź do poziomu z breadcrumbs (index 0 = root listy)
     fun goToBreadcrumb(index: Int) {
